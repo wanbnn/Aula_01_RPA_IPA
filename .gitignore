@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Ambientes Virtuais
+.venv/
+venv/
+env/
+ENV/
+
+# PyInstaller
+build/
+
+# Logs e outros
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

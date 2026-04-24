@@ -1,0 +1,12 @@
+{
+	"servers": {
+		"automate_browser": {
+		"type": "stdio",
+		"command": "./dist/browser_server.exe",
+		"env": {
+			"BROWSER_MCP_HEADLESS": "false"
+		}
+		}
+	},
+	"inputs": []
+}
