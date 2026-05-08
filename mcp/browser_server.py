@@ -52,6 +52,10 @@ class RuntimeSettings:
     viewport_width: int
     viewport_height: int
     max_snapshot_chars: int
+    interaction_pacing: bool
+    action_delay_ms: int
+    key_delay_ms: int
+    pointer_move_steps: int
 
     @classmethod
     def from_env(cls) -> "RuntimeSettings":
@@ -61,6 +65,10 @@ class RuntimeSettings:
             viewport_width=int(os.getenv("BROWSER_MCP_VIEWPORT_WIDTH", "1440")),
             viewport_height=int(os.getenv("BROWSER_MCP_VIEWPORT_HEIGHT", "900")),
             max_snapshot_chars=int(os.getenv("BROWSER_MCP_MAX_TEXT", "4000")),
+            interaction_pacing=_env_flag("BROWSER_MCP_INTERACTION_PACING", True),
+            action_delay_ms=max(0, int(os.getenv("BROWSER_MCP_ACTION_DELAY_MS", "180"))),
+            key_delay_ms=max(0, int(os.getenv("BROWSER_MCP_KEY_DELAY_MS", "65"))),
+            pointer_move_steps=max(1, int(os.getenv("BROWSER_MCP_POINTER_MOVE_STEPS", "12"))),
         )
 
 
@@ -189,15 +197,14 @@ class BrowserController:
         async with self._lock:
             page = self._require_page()
             await page.goto(_validate_url(url), wait_until=wait_until)
-            # Pequena pausa humana pós-carregamento
-            await asyncio.sleep(1.2)
+            await self._paced_sleep(multiplier=4.0)
             return await self._build_snapshot(page)
 
     async def click(self, selector: str) -> dict[str, Any]:
         async with self._lock:
             page = self._require_page()
-            await page.locator(selector).first.click()
-            await page.wait_for_load_state("networkidle")
+            await self._click_locator(page, page.locator(selector).first)
+            await self._wait_for_network_idle(page)
             return await self._build_snapshot(page)
 
     async def type_text(
@@ -211,20 +218,23 @@ class BrowserController:
         async with self._lock:
             page = self._require_page()
             field = page.locator(selector).first
-            await field.click()
+            await self._click_locator(page, field)
             if clear_first:
                 await field.fill("")
-            await field.type(text)
+                await self._paced_sleep()
+            await field.type(text, delay=self._settings.key_delay_ms if self._settings.interaction_pacing else 0)
             if press_enter:
+                await self._paced_sleep()
                 await field.press("Enter")
-                await page.wait_for_load_state("networkidle")
+                await self._wait_for_network_idle(page)
             return await self._build_snapshot(page)
 
     async def press(self, key: str) -> dict[str, Any]:
         async with self._lock:
             page = self._require_page()
+            await self._paced_sleep()
             await page.keyboard.press(key)
-            await page.wait_for_load_state("networkidle")
+            await self._wait_for_network_idle(page)
             return await self._build_snapshot(page)
 
     async def wait_for(self, selector: str, state: str) -> dict[str, Any]:
@@ -273,6 +283,69 @@ class BrowserController:
                 "count": len(items),
                 "elements": items,
             }
+
+    async def _click_locator(self, page: Page, locator: Any) -> None:
+        await locator.scroll_into_view_if_needed()
+        await self._paced_sleep()
+        box = await locator.bounding_box()
+        if box is None:
+            await locator.click()
+            return
+
+        x = box["x"] + box["width"] / 2
+        y = box["y"] + box["height"] / 2
+        await self._move_pointer(page, x, y)
+        await self._paced_sleep()
+        await page.mouse.click(x, y)
+        await self._paced_sleep()
+
+    async def _move_pointer(self, page: Page, target_x: float, target_y: float) -> None:
+        if not self._settings.interaction_pacing:
+            await page.mouse.move(target_x, target_y)
+            return
+
+        start = await page.evaluate(
+            """
+            () => {
+                const x = Number(window.__mcpMouseX);
+                const y = Number(window.__mcpMouseY);
+                return {
+                    x: Number.isFinite(x) ? x : Math.max(1, Math.floor(window.innerWidth * 0.35)),
+                    y: Number.isFinite(y) ? y : Math.max(1, Math.floor(window.innerHeight * 0.35)),
+                };
+            }
+            """
+        )
+        start_x = float(start["x"])
+        start_y = float(start["y"])
+        steps = self._settings.pointer_move_steps
+        for index in range(1, steps + 1):
+            progress = index / steps
+            eased = progress * progress * (3 - 2 * progress)
+            jitter_x = ((index % 3) - 1) * min(4.0, abs(target_x - start_x) * 0.015)
+            jitter_y = (((index + 1) % 3) - 1) * min(4.0, abs(target_y - start_y) * 0.015)
+            x = start_x + (target_x - start_x) * eased + jitter_x
+            y = start_y + (target_y - start_y) * eased + jitter_y
+            await page.mouse.move(x, y)
+            await asyncio.sleep(max(0.005, self._settings.action_delay_ms / 1000 / steps))
+
+        await page.mouse.move(target_x, target_y)
+        await page.evaluate(
+            "([x, y]) => { window.__mcpMouseX = x; window.__mcpMouseY = y; }",
+            [target_x, target_y],
+        )
+
+    async def _paced_sleep(self, *, multiplier: float = 1.0) -> None:
+        if not self._settings.interaction_pacing or self._settings.action_delay_ms == 0:
+            return
+        await asyncio.sleep((self._settings.action_delay_ms / 1000) * multiplier)
+
+    @staticmethod
+    async def _wait_for_network_idle(page: Page) -> None:
+        try:
+            await page.wait_for_load_state("networkidle", timeout=5000)
+        except PlaywrightTimeoutError:
+            pass
 
     def _require_page(self) -> Page:
         if self._page is None:
