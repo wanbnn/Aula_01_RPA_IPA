@@ -1,11 +1,25 @@
 {
 	"servers": {
 		"automate_browser": {
-		"type": "stdio",
-		"command": "./dist/browser_server.exe",
-		"env": {
-			"BROWSER_MCP_HEADLESS": "false"
-		}
+			"type": "stdio",
+			"command": "python",
+			"args": [
+				"./mcp/browser_server.py"
+			],
+			"env": {
+				"BROWSER_MCP_HEADLESS": "false"
+			}
+		},
+		"automate_excel": {
+			"type": "stdio",
+			"command": "python",
+			"args": [
+				"./mcp/excel_server.py"
+			],
+			"env": {
+				"EXCEL_MCP_VISIBLE": "true",
+				"EXCEL_MCP_DISPLAY_ALERTS": "false"
+			}
 		}
 	},
 	"inputs": []

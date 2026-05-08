@@ -80,13 +80,95 @@ class BrowserController:
 
     async def start(self) -> None:
         self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(headless=self._settings.headless)
+
+        launch_kwargs: dict[str, Any] = {
+            "headless": self._settings.headless,
+            "args": [
+                "--disable-blink-features=AutomationControlled",
+                "--disable-infobars",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-features=IsolateOrigins,site-per-process",
+                "--disable-dev-shm-usage",
+                "--no-sandbox",
+            ],
+            "ignore_default_args": ["--enable-automation"],
+        }
+
+        # Tenta usar o Chrome real instalado (muito menos detectável que Chromium)
+        try:
+            self._browser = await self._playwright.chromium.launch(
+                channel="chrome",
+                **launch_kwargs,
+            )
+        except Exception:
+            self._browser = await self._playwright.chromium.launch(**launch_kwargs)
+
         self._context = await self._browser.new_context(
             viewport={
                 "width": self._settings.viewport_width,
                 "height": self._settings.viewport_height,
-            }
+            },
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            locale="pt-BR",
+            timezone_id="America/Sao_Paulo",
+            permissions=["geolocation"],
+            extra_http_headers={
+                "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": '"Windows"',
+            },
         )
+
+        # Stealth: remove rastros de automação antes de qualquer script da página
+        await self._context.add_init_script("""
+            // Oculta webdriver
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+
+            // Plugins realistas
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => {
+                    const arr = [
+                        { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+                        { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
+                        { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
+                    ];
+                    arr.__proto__ = PluginArray.prototype;
+                    return arr;
+                },
+            });
+
+            // Languages
+            Object.defineProperty(navigator, 'languages', { get: () => ['pt-BR', 'pt', 'en-US', 'en'] });
+
+            // Hardware realista
+            Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+            Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+
+            // Permissões — evita fingerprint via Notification.permission
+            const originalQuery = window.navigator.permissions.query.bind(navigator.permissions);
+            window.navigator.permissions.query = (parameters) =>
+                parameters.name === 'notifications'
+                    ? Promise.resolve({ state: Notification.permission })
+                    : originalQuery(parameters);
+
+            // Remove propriedade cdc_ injetada pelo chromedriver
+            delete window.cdc_adoQpoasnfa76pfcZLmcfl_Array;
+            delete window.cdc_adoQpoasnfa76pfcZLmcfl_Promise;
+            delete window.cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
+
+            // Chrome runtime simulado
+            if (!window.chrome) {
+                window.chrome = { runtime: {} };
+            }
+        """)
+
         self._context.set_default_timeout(self._settings.timeout_ms)
         self._page = await self._context.new_page()
 
@@ -107,6 +189,8 @@ class BrowserController:
         async with self._lock:
             page = self._require_page()
             await page.goto(_validate_url(url), wait_until=wait_until)
+            # Pequena pausa humana pós-carregamento
+            await asyncio.sleep(1.2)
             return await self._build_snapshot(page)
 
     async def click(self, selector: str) -> dict[str, Any]:

@@ -1,20 +1,22 @@
 [project]
-name = "browser-mcp-server"
-version = "0.1.0"
-description = "FastMCP server for autonomous browser automation with Playwright."
+name = "automation-mcp-servers"
+version = "0.2.0"
+description = "FastMCP servers for autonomous browser and Microsoft Excel automation."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "mcp[cli]>=1.2.0",
     "playwright>=1.52.0",
+    "pywin32>=306; platform_system == 'Windows'",
 ]
 
 [project.scripts]
 browser-mcp = "browser_server:main"
+excel-mcp = "excel_server:main"
 
 [build-system]
 requires = ["hatchling>=1.27.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-include = ["browser_server.py"]
+include = ["browser_server.py", "excel_server.py"]
